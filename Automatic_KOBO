@@ -1,0 +1,509 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Mar 19 09:55:49 2020
+
+@author: jbrees
+"""
+
+#%%FUNCTIONS AND LIBRARIES
+import numpy as np
+import pandas as pd
+from PIL import Image
+from os import path
+
+#%%FILES AND LOCATIONS
+
+#Main folder path where all files and sub-folders are located (usually not to be changed)
+folder = 'C:/Kin/RMCA/Congo validation/'
+
+#Sub-Folder path within the newly downloaded picture-folder from the KOBO website (TO BE CHANGED)
+pics = '5Nov2021/atrap_drc/attachments/3b31f096aedb4b80aec19f2bd6e6e8f1/'
+
+#Name of the last checked excel sheet from the KOBO website ('empty.xlsx' for first check) (TO BE CHANGED)
+previous = 'empty.xlsx' 
+
+#Name of the newly downloaded excel sheet from the KOBO website (TO BE CHANGED)
+current = '5Nov2021_Unchecked_translated.xlsx'
+
+#Name of the new excel file to save too (= 'current_Temp') (TO BE CHANGED)
+temp = '5Nov2021_Temp.xlsx'
+
+#Name of the csv-file containing the true coordinates of all the sites (not to be changed)
+coordinates = 'ContactPoints_Updated.csv'
+
+#Name of the xlsx-file containing ID's and device ID's (not to be changed)
+device_IDs = 'CS_Device_ID.xlsx'
+
+#If a Temp-file is already present, then this one will be the 'previous'
+if path.exists(folder + temp):
+    previous = temp
+    
+#%%SETTING PARAMETERS
+
+##LATITUDE OF THE AREA (APPROX.)
+Lat = 1 #in decimal degrees
+
+##UPPER & LOWER SCOOPTIME LIMITS
+tmin = pd.to_timedelta('0 days 00:20:00') #minimum time to scoop
+tmax = pd.to_timedelta('0 days 00:40:00') #maximum time to scoop
+
+##UPPER & LOWER TEMPERATURE WARNING THRESHOLDS IN DEGREES CELSIUS
+Tmin = 10 #minimum temp
+Tmax = 35 #maximum temp
+
+##DISTANCE FROM TRUE LOCATION THRESHOLD 
+Dmax = 200 #in meters
+
+Dmax_x = Dmax/(111320*np.cos(np.radians(Lat))) #converts to decimal degrees 
+Dmax_y = Dmax/111320
+
+##FULL CHECK (1) OR AUTO CHECK (0)? 
+check_user = 1
+
+#%%MAKE DATAFRAMES AND ADD COLUMNS FOR NEW DATA
+df_prev = pd.read_excel(folder + previous)
+df = pd.read_excel(folder + current)
+coordinates = pd.read_csv(folder + coordinates)
+device_IDs = pd.read_excel(folder + device_IDs)
+
+##ONLY CREATE COLUMNS IF NOT YET THERE
+if not 'NO3' in df.columns:
+    df['NO3']=np.nan
+    df['GH']=np.nan
+    df['KH']=np.nan
+    df['pH']=np.nan
+    df['Cl2']=np.nan
+    df['_validation_status']=0
+    df['ID_Error']=0
+    df['Date_warning']=0
+    df['Location_Error']=0
+    df['Scoop_Time_Error']=0
+    df['Strip_Error']=0
+    df['Bio_Error']=0
+    df['Bul_Error']=0
+    df['Lym_Error']=0
+    df['Pool_Error']=0
+    df['Temp_Warning']=0
+    df['Probe_Warning']=0
+    df['Gyr_possible']=0
+
+#%%LOOP THROUGH ALL PROTOCOLS
+for i in range(0,df.shape[0]):
+    
+    ##CHECK IF PROTOCOL IS NOT ALREADY CHECKED
+    if df_prev.loc[df_prev['_id']==df.loc[i,'_id'],['_validation_status']].empty:
+        print(df.loc[i,'ID'])
+        print(df.loc[i,'Watercontactsite'])
+        print('NEW PROTOCOL FROM ID ' + str(df.loc[i,'ID']) + ': ' + str(df.loc[i,'Watercontactsite']) )
+        
+        ##CHECK SCOOPER-ID WITH DEVICE-ID
+        print(df.loc[i,'deviceid'] )
+        try:        
+            print(device_IDs.loc[int(df.loc[i,'ID_2']-1),'Device_ID'])
+            if df.loc[i,'deviceid'] != device_IDs.loc[int(df.loc[i,'ID_2']-1),'Device_ID']:
+                print('!!DEVICE AND ID DO NOT MATCH!!')
+                df.loc[i,'ID_Error'] = 1
+            else:
+                print('DEVICE ID OK')
+        except ValueError:
+            print('!! NO ID recordede, DEVICE AND ID DO NOT MATCH!!')
+            df.loc[i,'ID_Error'] = 1
+            
+        ##USER CHECK OF DATE
+        if check_user == 1:
+            stop = 0
+            while stop == 0:
+                date_ok = input('Is the following date realistic: ' + str(df.loc[i,'Select the date']) + '?')
+                if date_ok == '0':
+                    print('!!DATE NOT OK!!')
+                    df.loc[i,'Date_warning'] = 1
+                    stop = 1
+                elif date_ok == '':
+                    print('DATE OK')
+                    stop = 1
+                else:
+                    print('!!INPUT NOT OK!!')
+     
+        if type(df.loc[i,'Watercontactsite']) == float:
+            print("neinnnn")
+        else:
+        ##CHECK DISTANCE FROM TRUE LOCATION   
+            x_dist = df.loc[i,'_Take a GPS point_longitude'] - coordinates.loc[coordinates['Full_Name'] == df.loc[i,'Watercontactsite'],['xcoord']]  #_Take a GPS point_longitude
+            y_dist = df.loc[i,'_Take a GPS point_latitude'] - coordinates.loc[coordinates['Full_Name'] == df.loc[i,'Watercontactsite'],['ycoord']]  #_Take a GPS point_latitude
+            if  len(x_dist) == 0 or len(y_dist)==0:    ###################################################
+                print('!!Location not correspond to contact site list!!')                   ###################################################
+                df.loc[i,'Location_Error'] = 1          ###################################################
+            elif abs(x_dist.iloc[0,0]) > Dmax_x or abs(y_dist.iloc[0,0]) > Dmax_y :
+                print('!!LOCATION NOT OK!!')
+                print('X_DIST = ' + str(abs(x_dist.iloc[0,0]) * (111320*np.cos(np.radians(Lat)))))
+                print('Y_DIST = ' + str(abs(y_dist.iloc[0,0]) * 111320))
+                print('ACCURACY = ' + str(df.loc[i,'_Take a GPS point_precision'])) #_Take a GPS point_precision
+                df.loc[i,'Location_Error'] = 1
+            else:
+                print('LOCATION OK')    
+            
+        ##CHECK FOR 'NO WATER' OPTION
+        if df.loc[i,'Why was the water site not used this week?/There is NO water '] !=1: # and df.loc[i,'Are you sampling this site today?'] == 'Yes':
+        
+            ##CHECKING SCOOP-TIME
+            start = pd.to_datetime(df.loc[i,'What is the time now?'])
+            stop = pd.to_datetime(df.loc[i,'You are done scooping. What is the time now?'])
+            duration = stop - start
+            if duration < tmin or duration > tmax:
+                print('!!SCOOP-TIME NOT OK!!')
+                df.loc[i,'Scoop_Time_Error'] = 1
+            else:
+                print('SCOOP-TIME OK')
+            
+            ##SHOWING AND READING TEST STRIP DATA
+            if check_user == 1:
+                if path.exists(folder + pics + df.loc[i,'_uuid']):
+                    print('exist')
+                    print(df.loc[i,'_uuid'])
+                    print(df.loc[i,'Place the test strip on the left side of the color chart (indicated in gray) and take a clear photograph.'])
+                    try:
+                        df.loc[i,'Place the test strip on the left side of the color chart (indicated in gray) and take a clear photograph.'] = str(df.loc[i,'Place the test strip on the left side of the color chart (indicated in gray) and take a clear photograph.'])
+                        if path.exists(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place the test strip on the left side of the color chart (indicated in gray) and take a clear photograph.']):
+                            strip = Image.open(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place the test strip on the left side of the color chart (indicated in gray) and take a clear photograph.'])
+                            strip.show()
+                            stop = 0
+                            while stop == 0:
+                                strip_ok = input('Strip OK? 0 for not ok')
+                                if strip_ok == '0':
+                                    print('!!STRIP NOT OK!!')
+                                    df.loc[i,'Strip_Error'] = 1
+                                    stop = 1
+                                elif strip_ok == '':
+                                    print('STRIP OK')
+                                    ##Keep asking for NO3 until a correct value is entered
+                                    stop = 0
+                                    while stop == 0: 
+                                        NO3 = input('NO3=  ')
+                                        if NO3 in ['0','10','25','50','100','250','500']:
+                                            df.loc[i,'NO3'] = float(NO3)
+                                            stop = 1
+                                        else:
+                                            print('!!INPUT NOT OK!!')
+                                    ##Keep asking for GH until a correct value is entered
+                                    stop = 0
+                                    while stop == 0:
+                                        GH = input('GH=  ')
+                                        if GH in ['3','4','7','14','21']:
+                                            df.loc[i,'GH'] = float(GH)
+                                            stop = 1
+                                        else:
+                                            print('!!INPUT NOT OK!!')
+                                    ##Keep asking for KH until a correct value is entered        
+                                    stop = 0
+                                    while stop == 0:
+                                        KH = input('KH=  ')
+                                        if KH in ['0','3','6','10','15','20']:
+                                            df.loc[i,'KH'] = float(KH)
+                                            stop = 1
+                                        else:
+                                            print('!!INPUT NOT OK!!')  
+                                    ##Keep asking for pH until a correct value is entered        
+                                    stop = 0
+                                    while stop == 0:
+                                        pH = input('pH=  ')
+                                        if pH in ['6.4','6.8','7.2','7.6','8.0','8.4']:
+                                            df.loc[i,'pH'] = float(pH)
+                                            stop = 1
+                                        else:
+                                            print('!!INPUT NOT OK!!')     
+                                    ##Keep asking for Cl2 until a correct value is entered
+                                    stop = 0
+                                    while stop == 0:
+                                        Cl2 = input('Cl2=  ')
+                                        if Cl2 in ['0','0.8','1.5','3.0']:
+                                            df.loc[i,'Cl2'] = float(Cl2)
+                                            stop = 1
+                                        else:
+                                            print('!!INPUT NOT OK!!')                                     
+                                    stop = 1
+                                else:
+                                    print('!!INPUT NOT OK!!')                           
+                        else:
+                            print('!!STRIP PIC MISSING!!')
+                            df.loc[i,'Strip_Error'] = 1
+                    except ValueError:
+                        print('the file does not exist')
+
+                else:
+                    print('the file does not exist')
+            '''
+            ##IF NO SNAILS WERE CAUGHT, SET ALL ABUNDANCES TO ZERO (instead of Nan)
+            if df.loc[i,'Did you find any snails?'] == 'No':
+                print('NO SNAILS FOUND')
+                df.loc[i,'What is the number of Biomphalaria specimens? (example shown below)'] = 0 #What is the number of Biomphalaria specimens? (example shown below)
+                df.loc[i,'What is the number of Bulinus specimens? (example shown below)'] = 0  #What is the number of Bulinus specimens? (example shown below)
+                df.loc[i,'What is the number of Lymnea specimens? (example shown below)'] = 0  #What is the number of Lymnea specimens? (example shown below)
+            '''    
+            ##SHOWING AND CHECKING SNAIL PICTURES        
+            if check_user == 1:
+                
+                #Biomphalaria
+                if df.loc[i,'What is the number of Biomphalaria specimens? (example shown below)'] > 0: #What is the number of Biomphalaria specimens? (example shown below)
+                    if path.exists(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all Biomphalaria specimens on the scale paper and take a photograph.']):
+                        bio = Image.open(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all Biomphalaria specimens on the scale paper and take a photograph.'])
+                        print(path.join(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all Biomphalaria specimens on the scale paper and take a photograph.']))
+                        bio.show()
+                        stop = 0
+                        while stop == 0:
+                            bio_ok = input('Number of Bio is ' + str(df.loc[i,'What is the number of Biomphalaria specimens? (example shown below)']) + '? 0 for not ok and 2 for Gyr: ') #What is the number of Biomphalaria specimens? (example shown below)
+                            if bio_ok == '0':
+                                print('!!BIOMPHALARIA NOT OK!!')
+                                df.loc[i,'Bio_Error'] = 1
+                                ##############################################
+                                bio_ok_q1 = input("Is biomphalaria exist? 0 for no: ")
+                                if bio_ok_q1 == "0":
+                                    print('BIOMPHALARIA not exist')
+                                elif bio_ok_q1 == '':
+                                    df.loc[i, "Bio_Error_bio_exist"] = 1
+                                    print('BIOMPHALARIA exist')
+                                    bio_ok_count = input("what is the number of biomphalaria here? ")
+                                    df.loc[i, "bio_count"] = bio_ok_count
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                bio_ok_q2 = input("Is lymnaea exist? 0 for no: ")
+                                if bio_ok_q2 == "0":
+                                    print('lymnaea not exist')
+                                elif bio_ok_q2 == '':
+                                    df.loc[i, "Bio_Error_lym_exist"] = 1
+                                    print('lymnaea exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                bio_ok_q3 = input("Is bulinus exist? 0 for no: ")
+                                if bio_ok_q3 == "0":
+                                    
+                                    print('Bulinus not exist')
+                                elif bio_ok_q3 == '':
+                                    df.loc[i, "Bio_Error_bul_exist"] = 1
+                                    print('Bulinus exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                bio_ok_q4 = input("Is pool exist? 0 for no: ")
+                                if bio_ok_q4 == "0":
+                                    print('Pool not exist')
+                                elif bio_ok_q4 == '':
+                                    df.loc[i, "Bio_Error_pool_exist"] = 1
+                                    print('Pool exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                stop = 1
+                                ##############################################
+                            elif bio_ok == '':
+                                print('BIOMPHALARIA OK')
+                                stop = 1
+                            elif bio_ok == '2':
+                                df.loc[i,'Bio_Error'] = 1
+                                df.loc[i,'Gyr_possible'] = 1
+                                df.loc[i, "Bio_Error_pool_exist"] = 1
+                                print('possibly Gyraulus')
+                                stop = 1
+                            else:
+                                print('!!INPUT NOT OK!!')                               
+                    else:
+                        print('!!BIOMPHALARIA PIC MISSING!!')
+                        df.loc[i,'Bio_Error'] = 1
+                
+                #Bulinus
+                if df.loc[i,'What is the number of Bulinus specimens? (example shown below)'] > 0:  #What is the number of Bulinus specimens? (example shown below)
+                    if path.exists(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all Bulinus specimens on the scale paper and take a photograph.']): #Place all Bulinus specimens on the scale paper and take a photograph.
+                        bul = Image.open(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all Bulinus specimens on the scale paper and take a photograph.']) #Place all Bulinus specimens on the scale paper and take a photograph.
+                        bul.show()
+                        stop = 0
+                        while stop == 0:
+                            bul_ok = input('Number of Bul is ' + str(df.loc[i,'What is the number of Bulinus specimens? (example shown below)']) + '? 0 for not ok: ')   #What is the number of Bulinus specimens? (example shown below)
+                            if bul_ok == '0':
+                                print('!!BULINUS NOT OK!!')
+                                df.loc[i,'Bul_Error'] = 1
+                                ##############################################
+                                bul_ok_q1 = input("Is biomphalaria exist? 0 for no: ")
+                                if bul_ok_q1 == "0":
+                                    print('BIOMPHALARIA not exist')
+                                elif bul_ok_q1 == '':
+                                    df.loc[i, "Bul_Error_bio_exist"] = 1
+                                    print('BIOMPHALARIA exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                bul_ok_q2 = input("Is lymnaea exist? 0 for no: ")
+                                if bul_ok_q2 == "0":
+                                    print('lymnaea not exist')
+                                elif bul_ok_q2 == '':
+                                    df.loc[i, "Bul_Error_lym_exist"] = 1
+                                    print('lymnaea exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                bul_ok_q3 = input("Is bulinus exist? 0 for no: ")
+                                if bul_ok_q3 == "0":
+                                    print('Bulinus not exist')
+                                elif bul_ok_q3 == '':
+                                    df.loc[i, "Bul_Error_bul_exist"] = 1
+                                    print('Bulinus exist')
+                                    bul_ok_count = input("what is the number of bulinus here? ")
+                                    df.loc[i, "bul_count"] = bul_ok_count
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                bul_ok_q4 = input("Is pool exist? 0 for no: ")
+                                if bul_ok_q4 == "0":
+                                    print('Pool not exist')
+                                elif bul_ok_q4 == '':
+                                    df.loc[i, "Bul_Error_pool_exist"] = 1
+                                    print('Pool exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                stop = 1
+                                ##############################################
+
+                            elif bul_ok == '':
+                                print('BULINUS OK')
+                                stop = 1
+                            else:
+                                print('!!INPUT NOT OK!!')
+                    else:
+                        print('!!BULINUS PIC MSSING!!')
+                        df.loc[i,'Bul_Error'] = 1
+                        
+                #Lymnaea
+                if df.loc[i,'What is the number of Lymnaea specimens? (example shown below)'] > 0: #What is the number of Lymnea specimens? (example shown below)
+                    if path.exists(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all Lymnaea specimens on the scale paper and take a photograph.']): #Place all Lymnea specimens on the scale paper and take a photograph.
+                        lym = Image.open(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all Lymnaea specimens on the scale paper and take a photograph.'])  #Place all Lymnea specimens on the scale paper and take a photograph.
+                        lym.show()
+                        stop = 0
+                        while stop == 0:
+                            lym_ok = input('Number of Lym is ' + str(df.loc[i,'What is the number of Lymnaea specimens? (example shown below)']) + '? 0 for not ok: ') #What is the number of Lymnea specimens? (example shown below)
+                            if lym_ok == '0':
+                                print('!!LYMNAEA NOT OK!!')
+                                df.loc[i,'Lym_Error'] = 1
+                                ##############################################
+                                lym_ok_q1 = input("Is biomphalaria exist? 0 for no: ")
+                                if lym_ok_q1 == "0":
+                                    print('BIOMPHALARIA not exist')
+                                elif lym_ok_q1 == '':
+                                    df.loc[i, "Lym_Error_bio_exist"] = 1
+                                    print('BIOMPHALARIA exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                lym_ok_q2 = input("Is lymnaea exist? 0 for no: ")
+                                if lym_ok_q2 == "0":
+                                    print('lymnaea not exist')
+                                elif lym_ok_q2 == '':
+                                    df.loc[i, "lym_Error_lym_exist"] = 1
+                                    print('lymnaea exist')
+                                    lym_ok_count = input("what is the number of lymnaea here? ")
+                                    df.loc[i, "lym_count"] = lym_ok_count
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                lym_ok_q3 = input("Is bulinus exist? 0 for no: ")
+                                if lym_ok_q3 == "0":
+                                    print('Bulinus not exist')
+                                elif lym_ok_q3 == '':
+                                    df.loc[i, "Lym_Error_bul_exist"] = 1
+                                    print('Bulinus exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                lym_ok_q4 = input("Is pool exist? 0 for no: ")
+                                if lym_ok_q4 == "0":
+                                    print('Pool not exist')
+                                elif lym_ok_q4 == '':
+                                    df.loc[i, "Lym_Error_pool_exist"] = 1
+                                    print('Pool exist')
+                                else:
+                                    print('!!INPUT NOT OK!!')  
+                                
+                                stop = 1
+                                ##############################################
+                            elif lym_ok == '':
+                                print('LYMNAEA OK')
+                                stop = 1
+                            else:
+                                print('!!INPUT NOT OK!!')
+                    else:
+                        print('!!LYMNAEA PIC MISSING!!')
+                        df.loc[i,'Lym_Error'] = 1
+                        
+                #Pool
+                if df.loc[i,'Did you find any other snails? (NO Biomphalaria, Bulinus or Lymnaea)'] == 'YES': #Did you find any other snails? (NO Biomphalaria, Bulinus or Lymnaea)
+                    if path.exists(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all other specimens on the scale paper and take a photograph.']): #Place all other specimens on the scale paper and take a photograph.
+                        pool = Image.open(folder + pics + df.loc[i,'_uuid'] + '/' + df.loc[i,'Place all other specimens on the scale paper and take a photograph.']) #Place all other specimens on the scale paper and take a photograph.
+                        pool.show() 
+                        stop = 0
+                        while stop == 0:
+                            pool_ok = input('Pool is OK?  0 for not ok: ')
+                            if pool_ok == '0':
+                                print('!!POOL NOT OK!!')
+                                df.loc[i,'Pool_Error'] = 1
+                                stop = 1
+                                stop2 = 0
+                                while stop2 == 0:
+                                    pool_correction = input('Wrongly assigned to pool: Biomph (1), Bulinus (2), Lymnaea (3)')
+                                    if pool_correction == '1':
+                                        df.loc[i,'Bio_Error'] = 1
+                                        print('!!BIO WAS ASSIGNED TO POOL!!')
+                                        stop2 = 1
+                                    elif pool_correction == '2':
+                                        df.loc[i,'Bul_Error'] = 1
+                                        print('!!BUL WAS ASSIGNED TO POOL!!')
+                                        stop2 = 1
+                                    elif pool_correction == '3':
+                                        df.loc[i,'Lym_Error'] = 1
+                                        print('!!LYMNAEA WAS ASSIGNED TO POOL!!')
+                                        stop2 = 1
+                                    else:
+                                        print('INPUT NOT OK')
+                            elif pool_ok == '':
+                                print('POOL OK')
+                                stop = 1
+                            else:
+                                print('!!INPUT NOT OK!!')                                
+                    else:
+                        print('!!POOL PIC MSSING!!')
+                        df.loc[i,'Pool_Error'] = 1
+                        
+            ##CHECK TEMPERATURE
+            if df.loc[i,'Take the thermometer out of the water and note the temperature.'] < Tmin or df.loc[i,'Take the thermometer out of the water and note the temperature.'] > Tmax:
+                print('!!TEMPERATURE WARNING!!')
+                df.loc[i,'Temp_Warning']=1
+            else:
+                print('TEMPERATURE OK')
+            '''
+            ##CHECK PROBE PARAMETERS
+            if df.loc[i,'What is the temperature? (if you could not take the measurement, please enter 0)'] == 0 or df.loc[i,'What is the pH? (if you could not take the measurement, please enter 0)'] == 0 or df.loc[i,'What is the µS? (if you could not take the measurement, please enter 0)'] == 0 or df.loc[i,'What is the ppm? (if you could not take the measurement, please enter 0)'] == 0:
+                print('!!PROBE WARNING!!')        
+                df.loc[i,'Probe_Warning']=1
+            else:
+                print('PROBE OK')
+            '''
+        else:
+            if df.loc[i,'Why was the water site not used this week?/There is NO water '] ==1:
+                print('THERE WAS NO WATER')
+            else:
+                print('DID NOT GO SAMPLING')
+            
+        ##SET STATUS TO VALIDATED (1)        
+        df.loc[i,'_validation_status'] = 1
+                    
+        ##ADD CHECKED PROTOCOL TO PREVIOUS DATAFRAME (comment out for first ever check, no 'previous')
+        df_prev = pd.concat([df_prev,pd.DataFrame([df.loc[i,:]])], sort=False)       
+        
+        ##ASK TO CONTINUE
+        if check_user == 1:
+            go = input('CONTINUE?')
+            if go == '0':
+                break
+
+        ##SAVE TO TEMP EXCEL
+        df_prev.to_excel(folder + temp, index=False)
+
